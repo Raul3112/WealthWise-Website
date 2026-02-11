@@ -4,16 +4,14 @@ import { Wallet, Github, Twitter, Mail, Heart } from "lucide-react";
 const quickLinks = [
   { label: "Dashboard", href: "/dashboard" },
   { label: "Features", href: "/#features" },
-  { label: "AI Insights", href: "/tips/expense-analytics" },
-  { label: "Set Budget", href: "/tips/smart-budgeting" },
   { label: "Learn More", href: "/#pricing" },
 ];
 
 const featureLinks = [
-  { label: "Budget Planning", href: "/tips/smart-budgeting" },
-  { label: "Expense Tracking", href: "/tips/expense-analytics" },
-  { label: "AI Insights", href: "/tips/ocr-scanning" },
-  { label: "Financial Goals", href: "/tips/financial-goals" },
+  { label: "Budget Planning", href: "/dashboard/budgets" },
+  { label: "Expense Tracking", href: "/dashboard/transactions" },
+  { label: "Financial Goals", href: "/dashboard/goals" },
+  { label: "Reports", href: "/dashboard/reports" },
 ];
 
 export function Footer() {

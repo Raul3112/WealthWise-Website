@@ -7,12 +7,6 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import { DashboardLayout } from "./components/dashboard/DashboardLayout";
-import SmartBudgetingTips from "./pages/tips/SmartBudgetingTips";
-import ExpenseAnalyticsTips from "./pages/tips/ExpenseAnalyticsTips";
-import FinancialGoalsTips from "./pages/tips/FinancialGoalsTips";
-import OCRScanningTips from "./pages/tips/OCRScanningTips";
-import SubscriptionTrackingTips from "./pages/tips/SubscriptionTrackingTips";
-import ScheduledPaymentsTips from "./pages/tips/ScheduledPaymentsTips";
 import DashboardHome from "./pages/dashboard/DashboardHome";
 import Budgets from "./pages/dashboard/Budgets";
 import Goals from "./pages/dashboard/Goals";
@@ -35,12 +29,6 @@ const App = () => (
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/auth" element={<Auth />} />
-              <Route path="/tips/smart-budgeting" element={<SmartBudgetingTips />} />
-              <Route path="/tips/expense-analytics" element={<ExpenseAnalyticsTips />} />
-              <Route path="/tips/financial-goals" element={<FinancialGoalsTips />} />
-              <Route path="/tips/ocr-scanning" element={<OCRScanningTips />} />
-              <Route path="/tips/subscription-tracking" element={<SubscriptionTrackingTips />} />
-              <Route path="/tips/scheduled-payments" element={<ScheduledPaymentsTips />} />
               <Route path="/dashboard" element={<DashboardLayout />}>
                 <Route index element={<DashboardHome />} />
                 <Route path="budgets" element={<Budgets />} />
