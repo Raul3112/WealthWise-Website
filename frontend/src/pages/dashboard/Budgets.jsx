@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -14,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { AlertTriangle, AlertCircle, CheckCircle2, Plus, Trash2, Wallet, TrendingDown, PiggyBank, Target } from "lucide-react";
+import { AlertTriangle, AlertCircle, CheckCircle2, Plus, Trash2, Wallet, TrendingDown, PiggyBank, Target, Calendar } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 // Mock data: Budget categories
@@ -41,18 +42,13 @@ const INITIAL_BUDGETS = [
   { id: 5, category: "entertainment", type: "Weekly", amount: 1500, spent: 1650, startDate: "2026-01-01", alertThreshold: 80 },
 ];
 
-const MONTH_OPTIONS = [
-  "January 2026",
-  "February 2026",
-  "March 2026",
-  "April 2026",
-];
-
 export default function Budgets() {
   // State management
+  const now = new Date();
   const [budgets, setBudgets] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [selectedMonth, setSelectedMonth] = useState(MONTH_OPTIONS[0]);
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1); // 1-12
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ amount: "", type: "Monthly", alertThreshold: "80" });
   const [formData, setFormData] = useState({
@@ -74,6 +70,9 @@ export default function Budgets() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUserId(user.id);
+      } else {
+        // Fallback for dev/testing
+        setUserId("test_user_123");
       }
     };
     getUserId();
@@ -83,17 +82,17 @@ export default function Budgets() {
   useEffect(() => {
     if (!userId) return; // Wait for userId to be loaded
     
+    let isInitialLoad = true;
+    
     const fetchData = async () => {
-      setIsLoading(true);
+      // Only show loading spinner on initial load, not during polling
+      if (isInitialLoad) {
+        setIsLoading(true);
+      }
       setError(null);
       try {
-        // Parse month/year from selectedMonth (e.g., "January 2026")
-        const [monthName, yearStr] = selectedMonth.split(" ");
-        const monthNum = new Date(`${monthName} 1, ${yearStr}`).getMonth() + 1;
-        const year = parseInt(yearStr);
-
         const [budgetsData, categoriesData] = await Promise.all([
-          api.getBudgets({ month: monthNum, year }),
+          api.getBudgets({ month: selectedMonth, year: selectedYear }),
           api.getCategories(),
         ]);
         
@@ -107,11 +106,22 @@ export default function Budgets() {
           variant: "destructive" 
         });
       } finally {
-        setIsLoading(false);
+        if (isInitialLoad) {
+          setIsLoading(false);
+          isInitialLoad = false;
+        }
       }
     };
+    
     fetchData();
-  }, [selectedMonth, userId]);
+    
+    // Polling: refetch every 5 seconds to catch updates (reduced frequency to prevent blinking)
+    const pollInterval = setInterval(fetchData, 5000);
+    
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [selectedMonth, selectedYear, userId]);
 
   // TODO: Calculate spent from transactions when backend is ready
   // const calculateSpent = (budget, transactions) => {
@@ -147,10 +157,10 @@ export default function Budgets() {
   const overallUsage = totalBudget ? (totalSpent / totalBudget) * 100 : 0;
 
   const overallStatus = useMemo(() => {
-    if (totalBudget === 0) return { label: "No budgets", color: "bg-gray-200 text-gray-700" };
-    if (overallUsage >= 100) return { label: "Exceeded", color: "bg-red-100 text-red-700" };
-    if (overallUsage >= 80) return { label: "Near limit", color: "bg-amber-100 text-amber-800" };
-    return { label: "On track", color: "bg-emerald-100 text-emerald-800" };
+    if (totalBudget === 0) return { label: "No budgets", color: "bg-secondary text-muted-foreground" };
+    if (overallUsage >= 100) return { label: "Exceeded", color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" };
+    if (overallUsage >= 80) return { label: "Near limit", color: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" };
+    return { label: "On track", color: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400" };
   }, [overallUsage, totalBudget]);
 
   // Get category label
@@ -192,6 +202,34 @@ export default function Budgets() {
     return percentage >= threshold && percentage < 100;
   });
   const budgetsExceeded = budgets.filter((b) => b.spent > b.amount);
+
+  // Calculate days remaining in selected month
+  const getDaysRemaining = () => {
+    const now = new Date();
+    const currentDate = now.getDate();
+    const currentMonth = now.getMonth() + 1; // 1-12
+    const currentYear = now.getFullYear();
+    
+    // Calculate for the selected month/year
+    const daysInMonth = new Date(selectedYear, selectedMonth, 0).getDate();
+    
+    // If viewing a future month, show full days remaining
+    if (selectedYear > currentYear || (selectedYear === currentYear && selectedMonth > currentMonth)) {
+      return { daysRemaining: daysInMonth, percentagePassed: 0 };
+    }
+    
+    // If viewing a past month, show 0 days remaining, 100% passed
+    if (selectedYear < currentYear || (selectedYear === currentYear && selectedMonth < currentMonth)) {
+      return { daysRemaining: 0, percentagePassed: 100 };
+    }
+    
+    // If viewing current month, calculate based on today's date
+    const daysRemaining = daysInMonth - currentDate;
+    const percentagePassed = ((currentDate / daysInMonth) * 100).toFixed(0);
+    return { daysRemaining, percentagePassed };
+  };
+
+  const { daysRemaining, percentagePassed } = getDaysRemaining();
 
   // Handle form input changes
   const handleChange = (field, value) => {
@@ -293,11 +331,17 @@ export default function Budgets() {
   };
 
   // Handle delete budget
-  const handleDelete = async (id) => {
+  // Confirmation dialog state for delete
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const handleDelete = (id) => {
+    setConfirmDeleteId(id);
+  };
+  const confirmDelete = async () => {
+    if (!confirmDeleteId) return;
     try {
       setIsLoading(true);
-      await api.deleteBudget(id);
-      setBudgets((prev) => prev.filter((b) => b.id !== id));
+      await api.deleteBudget(confirmDeleteId);
+      setBudgets((prev) => prev.filter((b) => b.id !== confirmDeleteId));
       toast({ 
         title: "Budget removed", 
         description: "The category has been deleted.", 
@@ -311,6 +355,7 @@ export default function Budgets() {
       });
     } finally {
       setIsLoading(false);
+      setConfirmDeleteId(null);
     }
   };
 
@@ -373,95 +418,137 @@ export default function Budgets() {
     <div className="space-y-8 animate-fade-in">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Budget Planner</h1>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-3xl font-bold">Budget Planner</h1>
+            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800">Step 2: Set Budgets</Badge>
+          </div>
           <p className="text-muted-foreground">Set monthly limits and track your spending</p>
         </div>
-        <div className="flex items-center gap-3">
-          <Label className="text-sm text-muted-foreground">Month</Label>
-          <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-            <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="Select month" />
+        <div className="flex items-center gap-2">
+          <Select value={String(selectedMonth)} onValueChange={(val) => setSelectedMonth(parseInt(val))}>
+            <SelectTrigger className="w-36">
+              <Calendar className="w-4 h-4 mr-2" />
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {MONTH_OPTIONS.map((month) => (
-                <SelectItem key={month} value={month}>
-                  {month}
-                </SelectItem>
-              ))}
+              <SelectItem value="1">January</SelectItem>
+              <SelectItem value="2">February</SelectItem>
+              <SelectItem value="3">March</SelectItem>
+              <SelectItem value="4">April</SelectItem>
+              <SelectItem value="5">May</SelectItem>
+              <SelectItem value="6">June</SelectItem>
+              <SelectItem value="7">July</SelectItem>
+              <SelectItem value="8">August</SelectItem>
+              <SelectItem value="9">September</SelectItem>
+              <SelectItem value="10">October</SelectItem>
+              <SelectItem value="11">November</SelectItem>
+              <SelectItem value="12">December</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={String(selectedYear)} onValueChange={(val) => setSelectedYear(parseInt(val))}>
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={String(now.getFullYear())}>{now.getFullYear()}</SelectItem>
+              <SelectItem value={String(now.getFullYear() - 1)}>{now.getFullYear() - 1}</SelectItem>
+              <SelectItem value={String(now.getFullYear() - 2)}>{now.getFullYear() - 2}</SelectItem>
             </SelectContent>
           </Select>
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {/* Total Budget */}
         <Card variant="elevated">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Total Budget</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center gap-3 pb-6">
-            <div className="w-12 h-12 rounded-lg bg-blue-100 flex items-center justify-center">
-              <Wallet className="w-6 h-6 text-blue-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold">₹{totalBudget.toLocaleString()}</p>
-              <p className="text-xs text-muted-foreground">Based on all active categories</p>
+          <CardContent className="p-6">
+            <div className="space-y-3">
+              <div className="w-10 h-10 rounded-lg bg-primary/10 dark:bg-primary/20 flex items-center justify-center">
+                <Wallet className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground font-medium">Total Budget</p>
+                <p className="text-2xl font-bold mt-1">₹{totalBudget.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground mt-1">All categories combined</p>
+              </div>
             </div>
           </CardContent>
         </Card>
 
+        {/* Spent So Far */}
         <Card variant="elevated">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Spent So Far</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center gap-3 pb-6">
-            <div className="w-12 h-12 rounded-lg bg-red-100 flex items-center justify-center">
-              <TrendingDown className="w-6 h-6 text-red-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-red-600">₹{totalSpent.toLocaleString()}</p>
-              <p className="text-xs text-muted-foreground">From logged transactions</p>
+          <CardContent className="p-6">
+            <div className="space-y-3">
+              <div className="w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                <TrendingDown className="w-5 h-5 text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground font-medium">Spent So Far</p>
+                <p className="text-2xl font-bold text-red-600 dark:text-red-400 mt-1">₹{totalSpent.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground mt-1">From logged transactions</p>
+              </div>
             </div>
           </CardContent>
         </Card>
 
+        {/* Remaining */}
         <Card variant="elevated">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Remaining</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center gap-3 pb-6">
-            <div className="w-12 h-12 rounded-lg bg-emerald-100 flex items-center justify-center">
-              <PiggyBank className="w-6 h-6 text-emerald-600" />
-            </div>
-            <div>
-              <p className={`text-2xl font-bold ${remainingBudget >= 0 ? "text-emerald-700" : "text-red-600"}`}>
-                ₹{remainingBudget.toLocaleString()}
-              </p>
-              <p className="text-xs text-muted-foreground">Updated in real time</p>
+          <CardContent className="p-6">
+            <div className="space-y-3">
+              <div className="w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+                <PiggyBank className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground font-medium">Remaining</p>
+                <p className={`text-2xl font-bold mt-1 ${remainingBudget >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                  ₹{remainingBudget.toLocaleString()}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">Safe to spend</p>
+              </div>
             </div>
           </CardContent>
         </Card>
 
+        {/* Budget Status % */}
         <Card variant="elevated">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Budget Status</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 pb-6">
-            <div className="flex items-center gap-2">
-              <Badge className={overallStatus.color}>{overallStatus.label}</Badge>
-              <span className="text-sm text-muted-foreground">{overallUsage.toFixed(1)}% used</span>
+          <CardContent className="p-6">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground font-medium">Budget Status</p>
+                <Badge className={overallStatus.color}>
+                  <span className="text-xs">{overallStatus.label}</span>
+                </Badge>
+              </div>
+              <div className="space-y-2">
+                <p className="text-2xl font-bold">{overallUsage.toFixed(0)}%</p>
+                <Progress value={Math.min(overallUsage, 120)} className="h-2.5" />
+                <p className="text-xs text-muted-foreground">Used this month</p>
+              </div>
             </div>
-            <Progress value={Math.min(overallUsage, 120)} className="h-2" />
-            <p className="text-xs text-muted-foreground">
-              Status is driven by budget vs. expenses for {selectedMonth}.
-            </p>
+          </CardContent>
+        </Card>
+
+        {/* Days Left */}
+        <Card variant="elevated" className="border-primary/40">
+          <CardContent className="p-6">
+            <div className="space-y-3">
+              <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                <Calendar className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground font-medium">Period Remaining</p>
+                <p className="text-2xl font-bold mt-1">{daysRemaining} days</p>
+                <p className="text-xs text-muted-foreground mt-1">{percentagePassed}% of month passed</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
 
       {error && (
-        <Card variant="outline" className="border-red-200 bg-red-50">
+        <Card variant="outline" className="border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-900/20">
           <CardContent className="p-4">
-            <div className="flex items-start gap-3 text-red-700">
+            <div className="flex items-start gap-3 text-red-700 dark:text-red-400">
               <AlertTriangle className="w-5 h-5 mt-0.5" />
               <div>
                 <p className="font-semibold">Error loading budgets</p>
@@ -476,7 +563,7 @@ export default function Budgets() {
         <Card variant="outline" className="border-dashed">
           <CardContent className="p-4 space-y-2">
             {budgetsExceeded.length > 0 && (
-              <div className="flex items-start gap-3 text-red-700">
+              <div className="flex items-start gap-3 text-red-700 dark:text-red-400">
                 <AlertTriangle className="w-5 h-5 mt-0.5" />
                 <div>
                   <p className="font-semibold">Budget exceeded</p>
@@ -487,7 +574,7 @@ export default function Budgets() {
               </div>
             )}
             {budgetsWithWarnings.length > 0 && (
-              <div className="flex items-start gap-3 text-amber-700">
+              <div className="flex items-start gap-3 text-amber-700 dark:text-amber-400">
                 <AlertCircle className="w-5 h-5 mt-0.5" />
                 <div>
                   <p className="font-semibold">Approaching limit</p>
@@ -518,10 +605,10 @@ export default function Budgets() {
             {isLoading && (
               <div className="space-y-4">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="rounded-xl border p-4 animate-pulse">
-                    <div className="h-6 bg-gray-200 rounded w-1/3 mb-3"></div>
-                    <div className="h-4 bg-gray-200 rounded w-full mb-2"></div>
-                    <div className="h-4 bg-gray-200 rounded w-2/3"></div>
+                  <div key={i} className="rounded-xl border border-border p-4 animate-pulse">
+                    <div className="h-6 bg-secondary rounded w-1/3 mb-3"></div>
+                    <div className="h-4 bg-secondary rounded w-full mb-2"></div>
+                    <div className="h-4 bg-secondary rounded w-2/3"></div>
                   </div>
                 ))}
               </div>
@@ -537,7 +624,7 @@ export default function Budgets() {
               const status = getStatusForBudget(budget.spent, budget.amount, budget.alertThreshold || 80);
 
               return (
-                <div key={budget.id} className="rounded-xl border px-4 py-3 shadow-[0_8px_24px_-18px_rgba(0,0,0,0.35)] bg-white/70">
+                <div key={budget.id} className="rounded-xl border border-border px-4 py-3 shadow-[0_8px_24px_-18px_rgba(0,0,0,0.35)] bg-card">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <span className="text-2xl">{getCategoryIcon(budget.category)}</span>
@@ -565,10 +652,23 @@ export default function Budgets() {
                         variant="ghost"
                         size="sm"
                         onClick={() => handleDelete(budget.id)}
-                        className="hover:bg-red-100 hover:text-red-600"
+                        className="hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
+                          {/* Confirm Delete Dialog */}
+                          <Dialog open={!!confirmDeleteId} onOpenChange={open => { if (!open) setConfirmDeleteId(null); }}>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Delete Budget?</DialogTitle>
+                              </DialogHeader>
+                              <p>Are you sure you want to delete this budget? This action cannot be undone.</p>
+                              <div className="flex justify-end gap-2 mt-4">
+                                <Button variant="outline" onClick={() => setConfirmDeleteId(null)}>Cancel</Button>
+                                <Button variant="destructive" onClick={confirmDelete}>Delete</Button>
+                              </div>
+                            </DialogContent>
+                          </Dialog>
                     </div>
                   </div>
 
@@ -579,11 +679,11 @@ export default function Budgets() {
                     </div>
                     <div>
                       <p className="text-muted-foreground">Spent</p>
-                      <p className="font-semibold text-red-600">₹{budget.spent.toLocaleString()}</p>
+                      <p className="font-semibold text-red-600 dark:text-red-400">₹{budget.spent.toLocaleString()}</p>
                     </div>
                     <div>
                       <p className="text-muted-foreground">Remaining</p>
-                      <p className={`font-semibold ${remaining >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                      <p className={`font-semibold ${remaining >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
                         {remaining >= 0 ? "₹" : "-₹"}{Math.abs(remaining).toLocaleString()}
                       </p>
                     </div>
@@ -637,7 +737,7 @@ export default function Budgets() {
                   )}
 
                   <div className="mt-3 space-y-1">
-                    <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                    <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
                       <div
                         className={`h-full transition-all duration-300 ${getProgressColor(percentage)}`}
                         style={{ width: `${Math.min(percentage, 110)}%` }}
@@ -645,16 +745,16 @@ export default function Budgets() {
                     </div>
                     <div className="flex justify-between text-xs text-muted-foreground">
                       <span>{percentage.toFixed(1)}% used</span>
-                      {percentage >= 100 ? <span className="text-red-600 font-semibold">Exceeded</span> : null}
+                      {percentage >= 100 ? <span className="text-red-600 dark:text-red-400 font-semibold">Exceeded</span> : null}
                     </div>
                     {percentage >= (budget.alertThreshold || 80) && (
                       <div className="flex items-center gap-2 text-xs">
                         {percentage >= 100 ? (
-                          <AlertTriangle className="w-4 h-4 text-red-600" />
+                          <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
                         ) : (
-                          <AlertCircle className="w-4 h-4 text-amber-500" />
+                          <AlertCircle className="w-4 h-4 text-amber-500 dark:text-amber-400" />
                         )}
-                        <span className={percentage >= 100 ? "text-red-700" : "text-amber-700"}>
+                        <span className={percentage >= 100 ? "text-red-700 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}>
                           {percentage >= 100
                             ? `Exceeded by ₹${Math.abs(remaining).toLocaleString()}`
                             : `Almost at limit: ${percentage.toFixed(0)}%`}
@@ -769,10 +869,10 @@ export default function Budgets() {
             </CardContent>
           </Card>
 
-          <Card variant="flat" className="border border-dashed border-emerald-100">
+          <Card variant="flat" className="border border-dashed border-emerald-100 dark:border-emerald-900/30">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600" /> Budget tips
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" /> Budget tips
               </CardTitle>
               <CardDescription>Small nudges to keep you on track</CardDescription>
             </CardHeader>

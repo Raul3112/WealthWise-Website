@@ -14,6 +14,7 @@ const cardVariants = cva(
         emerald: "border-primary/20 bg-primary/5 hover:bg-primary/10",
         outline: "border-2 hover:border-primary/50",
         flat: "border-0 bg-muted/50",
+        ghost: "bg-muted/30 hover:bg-muted/50 border-muted/50",
       },
     },
     defaultVariants: {

@@ -91,13 +91,30 @@ def get_income_total(
 	month: int | None = None,
 	year: int | None = None,
 ):
-	"""Return summed income for the specified month/year (defaults to current)."""
-	current = datetime.utcnow()
-	month = month or current.month
-	year = year or current.year
+	"""Return summed income for the specified month/year, or all-time if both are None."""
+	conn = get_db_connection()
 	try:
-		total = _fetch_monthly_total(user_id, month, year)
-		return {"user_id": user_id, "total": total, "month": month, "year": year}
+		with conn.cursor() as cur:
+			if month is None and year is None:
+				# Return all-time total
+				cur.execute(
+					"""
+					SELECT COALESCE(SUM(amount), 0)
+					FROM incomes
+					WHERE user_id = %s;
+					""",
+					(user_id,),
+				)
+				row = cur.fetchone()
+				total = float(row[0]) if row else 0.0
+				return {"user_id": user_id, "total": total}
+			else:
+				# Return monthly total
+				current = datetime.utcnow()
+				month = month or current.month
+				year = year or current.year
+				total = _fetch_monthly_total(user_id, month, year)
+				return {"user_id": user_id, "total": total, "month": month, "year": year}
 	except Exception as exc:  # pragma: no cover - runtime guard
 		raise HTTPException(status_code=500, detail=f"Failed to fetch income total: {exc}") from exc
 

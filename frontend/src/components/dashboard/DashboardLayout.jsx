@@ -4,6 +4,7 @@ import { DashboardSidebar } from "./DashboardSidebar";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/hooks/use-toast";
+import { api } from "@/lib/api";
 
 const API_BASE = "http://127.0.0.1:8000";
 
@@ -15,23 +16,39 @@ export function DashboardLayout() {
   const [monthlyIncomeTotal, setMonthlyIncomeTotal] = useState(null);
   const [isLoadingIncomeTotal, setIsLoadingIncomeTotal] = useState(true);
   const [isSavingIncome, setIsSavingIncome] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const getIncomeStorageKey = useCallback(
+    (uid) => (uid ? `ww:last-income:${uid}` : null),
+    []
+  );
+
+  const persistLastIncome = useCallback(
+    (uid, income) => {
+      const key = getIncomeStorageKey(uid);
+      if (!key || !income) return;
+      const payload = {
+        amount: income.amount,
+        frequency: income.income_type || income.frequency || "monthly",
+        source: income.source || "",
+        note: income.note || "",
+        receivedDate: income.received_date || income.receivedDate || new Date().toISOString().slice(0, 10),
+      };
+      try {
+        localStorage.setItem(key, JSON.stringify(payload));
+      } catch (err) {
+        // Ignore storage errors.
+      }
+    },
+    [getIncomeStorageKey]
+  );
 
   const fetchMonthlyIncomeTotal = useCallback(
     async (uid, month, year) => {
       if (!uid) return;
       setIsLoadingIncomeTotal(true);
-      const params = new URLSearchParams();
-      if (month) params.set("month", month);
-      if (year) params.set("year", year);
-      const query = params.toString();
-      const url = `${API_BASE}/income/total${query ? `?${query}` : ""}`;
       try {
-        const { data } = await supabase.auth.getSession();
-        const token = data?.session?.access_token;
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const res = await fetch(url, { headers });
-        if (!res.ok) throw new Error(`Income total fetch failed (${res.status})`);
-        const body = await res.json();
+        const body = await api.getIncomeTotal(month, year);
         setMonthlyIncomeTotal(typeof body.total === "number" ? body.total : 0);
       } catch (err) {
         toast({ title: "Unable to load income total", description: err?.message || "Please try again." });
@@ -49,22 +66,20 @@ export function DashboardLayout() {
       try {
         const { data } = await supabase.auth.getSession();
         if (!active) return;
-        const uid = data?.session?.user?.id;
-        if (!uid) return;
-        const token = data?.session?.access_token;
+        const uid = data?.session?.user?.id || "test_user_123"; // Fallback for dev
         setUserId(uid);
 
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const res = await fetch(`${API_BASE}/income/latest`, { headers });
-        if (!res.ok) {
-          throw new Error(`Income check failed (${res.status})`);
-        }
-        const body = await res.json();
+        const body = await api.getLatestIncome();
         const hasIncome = body?.amount !== null && body?.amount !== undefined;
         if (hasIncome) {
           setLatestIncome(body);
+          persistLastIncome(uid, body);
         }
-        await fetchMonthlyIncomeTotal(uid); // Fetch monthly income total
+        // Fetch current month's income total
+        const now = new Date();
+        const currentMonth = now.getMonth() + 1;
+        const currentYear = now.getFullYear();
+        await fetchMonthlyIncomeTotal(uid, currentMonth, currentYear);
       } catch (err) {
         toast({ title: "Unable to check income", description: err?.message || "Please try again." });
       }
@@ -75,33 +90,22 @@ export function DashboardLayout() {
     return () => {
       active = false;
     };
-  }, [fetchMonthlyIncomeTotal]); // Added fetchMonthlyIncomeTotal as a dependency
+  }, [fetchMonthlyIncomeTotal, persistLastIncome]); // Added fetchMonthlyIncomeTotal as a dependency
 
   const handleSaveIncome = useCallback(
     async ({ amount, income_type, source, note, received_date }) => {
       if (!userId) throw new Error("User not available");
       try {
         setIsSavingIncome(true);
-        const { data } = await supabase.auth.getSession();
-        const token = data?.session?.access_token;
-        const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        const res = await fetch(`${API_BASE}/income`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...headers },
-          body: JSON.stringify({
-            amount,
-            income_type,
-            source,
-            note,
-            received_date,
-          }),
+        const created = await api.createIncome({
+          amount,
+          income_type,
+          source,
+          note,
+          received_date,
         });
-        if (!res.ok) {
-          const detail = await res.text();
-          throw new Error(detail || "Request failed");
-        }
-        const created = await res.json();
         setLatestIncome(created);
+        persistLastIncome(userId, created);
         await fetchMonthlyIncomeTotal(userId, created.month, created.year);
         toast({ title: "Income saved", description: "You're good to go." });
       } catch (err) {
@@ -111,26 +115,16 @@ export function DashboardLayout() {
         setIsSavingIncome(false);
       }
     },
-    [fetchMonthlyIncomeTotal, userId] // Added fetchMonthlyIncomeTotal as a dependency
+    [fetchMonthlyIncomeTotal, userId]
   );
 
   const handleCopyPrevious = useCallback(async () => {
     if (!userId) throw new Error("User not available");
     try {
       setIsSavingIncome(true);
-      const { data } = await supabase.auth.getSession();
-      const token = data?.session?.access_token;
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const res = await fetch(`${API_BASE}/income/same-as-previous`, {
-        method: "POST",
-        headers,
-      });
-      if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(detail || "Request failed");
-      }
-      const created = await res.json();
+      const created = await api.copyPreviousIncome();
       setLatestIncome(created);
+      persistLastIncome(userId, created);
       toast({ title: "Income copied", description: "Using your previous income." });
     } catch (err) {
       toast({ title: "Unable to reuse income", description: err?.message || "Please try again." });
@@ -138,7 +132,11 @@ export function DashboardLayout() {
     } finally {
       setIsSavingIncome(false);
     }
-  }, [fetchMonthlyIncomeTotal, userId]);
+  }, [userId]);
+
+  const triggerRefresh = useCallback(() => {
+    setRefreshKey(prev => prev + 1);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -149,19 +147,22 @@ export function DashboardLayout() {
 
       <div
         className={cn(
-          "transition-all duration-300",
+          "transition-all duration-300 bg-background",
           sidebarCollapsed ? "ml-[70px]" : "ml-[260px]"
         )}
       >
-        <main className="p-6">
+        <main className="p-6 bg-background min-h-screen">
           <Outlet
             context={{
               latestIncome,
+              userId,
               handleSaveIncome,
               handleCopyPrevious,
               monthlyIncomeTotal,
               isLoadingIncomeTotal,
               isSavingIncome,
+              triggerRefresh,
+              refreshKey,
             }}
           />
         </main>

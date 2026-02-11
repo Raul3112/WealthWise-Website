@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
-const STORAGE_KEY = "ww:last-income";
+const DEFAULT_STORAGE_KEY = "ww:last-income";
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const sourceOptions = [
@@ -31,6 +31,7 @@ export function AddIncomeDialog({
   previousIncome = null,
   loading = false,
   showTrigger = true,
+  storageKey,
 }) {
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const [formData, setFormData] = useState(() => ({
@@ -53,9 +54,11 @@ export function AddIncomeDialog({
     onOpenChange?.(value);
   };
 
+  const resolvedStorageKey = storageKey || DEFAULT_STORAGE_KEY;
+
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(resolvedStorageKey);
       if (stored) {
         setLastIncome(JSON.parse(stored));
       }
@@ -63,7 +66,7 @@ export function AddIncomeDialog({
       // Local storage unavailable; continue without prefill support.
       console.warn("Unable to load previous income", err);
     }
-  }, []);
+  }, [resolvedStorageKey]);
 
   useEffect(() => {
     if (previousIncome && previousIncome.amount !== undefined) {
@@ -109,7 +112,7 @@ export function AddIncomeDialog({
     // Fallback local-only behavior if no onSubmit provided
     toast({ title: "Income Added", description: `₹${amountValue.toFixed(2)} (${formData.frequency})` });
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
+      localStorage.setItem(resolvedStorageKey, JSON.stringify(formData));
       setLastIncome(formData);
     } catch (err) {
       console.warn("Unable to save income", err);

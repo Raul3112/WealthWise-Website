@@ -3,3 +3,6 @@ uvicorn
 psycopg2-binary
 python-dotenv
 PyJWT
+pytesseract
+Pillow
+python-multipart

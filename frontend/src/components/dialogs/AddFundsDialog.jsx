@@ -7,20 +7,40 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { PlusCircle } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
-export function AddFundsDialog({ trigger, goalName }) {
+export function AddFundsDialog({ trigger, goalName, availableBalance = 0, onAdd }) {
   const [open, setOpen] = useState(false);
   const [formData, setFormData] = useState({
     amount: "",
-    source: "",
     date: new Date().toISOString().split('T')[0],
     notes: ""
   });
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    toast({ title: "Funds Added", description: `$${formData.amount} added${goalName ? ` to ${goalName}` : ''}` });
+    const amount = Number(formData.amount);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast({ title: "Enter a valid amount", variant: "destructive" });
+      return;
+    }
+
+    if (amount > availableBalance) {
+      toast({
+        title: "Not enough available balance",
+        description: `You can use up to ₹${availableBalance.toLocaleString()}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    onAdd?.({
+      ...formData,
+      amount,
+    });
+
+    toast({ title: "Funds Added", description: `₹${amount.toLocaleString()} added${goalName ? ` to ${goalName}` : ''}` });
     setOpen(false);
-    setFormData({ amount: "", source: "", date: new Date().toISOString().split('T')[0], notes: "" });
+    setFormData({ amount: "", date: new Date().toISOString().split('T')[0], notes: "" });
   };
 
   return (
@@ -34,20 +54,9 @@ export function AddFundsDialog({ trigger, goalName }) {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label>Amount ($)</Label>
+            <Label>Amount (₹)</Label>
             <Input variant="emerald" type="number" step="0.01" value={formData.amount} onChange={(e) => setFormData({...formData, amount: e.target.value})} placeholder="0.00" required />
-          </div>
-          <div className="space-y-2">
-            <Label>Source Account</Label>
-            <Select value={formData.source} onValueChange={(v) => setFormData({...formData, source: v})}>
-              <SelectTrigger><SelectValue placeholder="Select source" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="checking">Checking Account</SelectItem>
-                <SelectItem value="savings">Savings Account</SelectItem>
-                <SelectItem value="cash">Cash</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
-              </SelectContent>
-            </Select>
+            <p className="text-xs text-muted-foreground">Available: ₹{availableBalance.toLocaleString()}</p>
           </div>
           <div className="space-y-2">
             <Label>Date</Label>

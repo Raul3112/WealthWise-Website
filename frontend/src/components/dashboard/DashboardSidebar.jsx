@@ -11,7 +11,6 @@ import {
   User,
   ChevronLeft,
   ChevronRight,
-  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -23,7 +22,7 @@ const navItems = [
   { icon: Wallet, label: "Budgets", path: "/dashboard/budgets" },
   { icon: Target, label: "Goals", path: "/dashboard/goals" },
   // { icon: Building, label: "Accounts", path: "/dashboard/accounts" },
-  { icon: Receipt, label: "Upload Bill", path: "/dashboard/upload-bill" },
+  // { icon: Receipt, label: "Upload Bill", path: "/dashboard/upload-bill" },
   { icon: PieChart, label: "Reports", path: "/dashboard/reports" },
   { icon: User, label: "Profile", path: "/dashboard/profile" },
 ];
@@ -85,20 +84,7 @@ export function DashboardSidebar({ collapsed, onToggle }) {
         </div>
       </ScrollArea>
 
-      {/* Footer */}
-      <div className="p-3 border-t border-sidebar-border">
-        <Button
-          variant="ghost"
-          className={cn(
-            "w-full justify-start text-sidebar-foreground hover:text-destructive hover:bg-destructive/10",
-            collapsed && "justify-center px-0"
-          )}
-          onClick={() => { window.location.href = "/"; }}
-        >
-          <LogOut className="w-5 h-5" />
-          {!collapsed && <span className="ml-2">Sign Out</span>}
-        </Button>
-      </div>
+      {/* Footer - Removed duplicate logout, use Profile page logout instead */}
 
       {/* Collapse Toggle */}
       <button

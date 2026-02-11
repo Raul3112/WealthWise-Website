@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Select,
@@ -35,6 +36,8 @@ export default function Transactions() {
     total_income: 0,
     expenses_by_category: {},
   });
+  const [incomeTotal, setIncomeTotal] = useState(0);
+  const [budgets, setBudgets] = useState([]);
 
   const [formData, setFormData] = useState({
     amount: "",
@@ -51,14 +54,16 @@ export default function Transactions() {
   const [showScanDialog, setShowScanDialog] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scannedData, setScannedData] = useState(null);
+  const [scannedTransactionId, setScannedTransactionId] = useState(null);  // Track OCR transaction for rescan
   const fileInputRef = useRef(null);
 
   // Filter states
-  const [selectedMonth, setSelectedMonth] = useState("2026-01");
+  const now = new Date();
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1); // 1-12
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterPaymentMode, setFilterPaymentMode] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [dateRange, setDateRange] = useState({ start: "", end: "" });
 
   // Get current user and load transactions
   useEffect(() => {
@@ -66,6 +71,9 @@ export default function Transactions() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUserId(user.id);
+      } else {
+        // Fallback for dev/testing
+        setUserId("test_user_123");
       }
     };
     loadUser();
@@ -76,8 +84,45 @@ export default function Transactions() {
       fetchCategories();
       fetchTransactions();
       fetchSummary();
+      fetchIncomeTotal();
+      fetchBudgets();
+      
+      // Polling: refetch summary, income, and budgets every 5 seconds to catch updates (reduced frequency to prevent blinking)
+      const pollInterval = setInterval(() => {
+        fetchSummary();
+        fetchIncomeTotal();
+        fetchBudgets();
+      }, 5000);
+      
+      return () => clearInterval(pollInterval);
     }
-  }, [userId, selectedMonth, filterCategory, filterPaymentMode, searchQuery]);
+  }, [userId, selectedMonth, selectedYear, filterCategory, filterPaymentMode, searchQuery]);
+
+  const fetchIncomeTotal = async () => {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token || "test_user_123"; // Fallback for dev
+
+      const res = await fetch(`http://127.0.0.1:8000/income/total?month=${selectedMonth}&year=${selectedYear}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const body = await res.json();
+        setIncomeTotal(typeof body.total === "number" ? body.total : 0);
+      }
+    } catch (err) {
+      console.warn("Unable to load income total", err);
+    }
+  };
+
+  const fetchBudgets = async () => {
+    try {
+      const data = await api.getBudgets({ month: selectedMonth, year: selectedYear });
+      setBudgets(data || []);
+    } catch (err) {
+      console.warn("Unable to load budgets", err);
+    }
+  };
 
   const fetchCategories = async () => {
     try {
@@ -105,9 +150,9 @@ export default function Transactions() {
   const fetchTransactions = async () => {
     try {
       setLoading(true);
-      const [year, month] = selectedMonth.split('-');
-      const startDate = `${year}-${month}-01`;
-      const endDate = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+      const month = String(selectedMonth).padStart(2, '0');
+      const startDate = `${selectedYear}-${month}-01`;
+      const endDate = new Date(selectedYear, selectedMonth, 0).toISOString().split('T')[0];
 
       const filters = {
         start_date: startDate,
@@ -118,10 +163,16 @@ export default function Transactions() {
       if (filterPaymentMode !== 'all') filters.payment_mode = filterPaymentMode;
       if (searchQuery) filters.search = searchQuery;
 
+      console.log("[Transactions] Fetching with filters:", filters);
       const data = await api.getTransactions(filters);
       
+      console.log("[Transactions] Got data:", data, "Type:", typeof data, "Is array:", Array.isArray(data));
+      
+      // Ensure data is an array
+      const txnArray = Array.isArray(data) ? data : [];
+      
       // Transform API response to match component format
-      const formatted = data.map(t => ({
+      const formatted = txnArray.map(t => ({
         id: t.id,
         amount: t.amount,
         type: t.txn_type,
@@ -129,12 +180,15 @@ export default function Transactions() {
         date: t.txn_date,
         description: t.description || 'No description',
         paymentMode: t.payment_mode,
+        source: t.source || 'manual',  // Include source field for OCR/Manual badge
       }));
       
+      console.log("[Transactions] Formatted:", formatted);
       setTransactions(formatted);
     } catch (error) {
-      console.error('Failed to fetch transactions:', error);
-      toast({ title: "Error", description: "Failed to load transactions", variant: "destructive" });
+      console.error('[Transactions] Error fetching transactions:', error);
+      console.error('[Transactions] Error details:', error.message);
+      toast({ title: "Error loading transactions", description: error.message || "Failed to load transactions", variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -142,8 +196,7 @@ export default function Transactions() {
 
   const fetchSummary = async () => {
     try {
-      const [year, month] = selectedMonth.split('-');
-      const data = await api.getTransactionSummary(parseInt(month), parseInt(year));
+      const data = await api.getTransactionSummary(selectedMonth, selectedYear);
       setSummary(data);
     } catch (error) {
       console.error('Failed to fetch summary:', error);
@@ -160,6 +213,42 @@ export default function Transactions() {
   const overspentCategories = Object.values(expensesByCategory).filter(
     (amount) => amount > 5000
   ).length;
+
+  // Calculate Net Flow
+  const netFlow = (incomeTotal || 0) - (totalExpenses || 0);
+
+  // Calculate Top Category
+  const getTopCategory = () => {
+    if (!expensesByCategory || Object.keys(expensesByCategory).length === 0) {
+      return { name: "No data", amount: 0, percentage: 0, icon: "📊" };
+    }
+    const topCat = Object.entries(expensesByCategory).reduce((max, [cat, amount]) => 
+      amount > max.amount ? { category: cat, amount } : max, 
+      { category: "", amount: 0 }
+    );
+    const categoryData = categories.find(c => c.value === topCat.category);
+    const percentage = totalExpenses > 0 ? ((topCat.amount / totalExpenses) * 100).toFixed(0) : 0;
+    return {
+      name: categoryData?.label || topCat.category,
+      amount: topCat.amount,
+      percentage,
+      icon: categoryData?.icon || "💰"
+    };
+  };
+
+  // Calculate Over Budget Categories
+  const getOverBudgetCount = () => {
+    const totalBudget = budgets.reduce((acc, b) => acc + b.amount, 0);
+    const totalSpent = budgets.reduce((acc, b) => acc + b.spent, 0);
+    const overBudgetCategories = budgets.filter((b) => b.spent > b.amount);
+    return {
+      count: overBudgetCategories.length,
+      categories: overBudgetCategories.map(b => categories.find(c => c.value === b.category)?.label || b.category).join(", ")
+    };
+  };
+
+  const topCategory = getTopCategory();
+  const overBudget = getOverBudgetCount();
 
   // Filter transactions (client-side for already fetched data)
   const filteredTransactions = currentMonthExpenses;
@@ -286,23 +375,37 @@ export default function Transactions() {
     }
   };
 
+
+  // Confirmation dialog state
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  // Remove undo state
+
   const handleDelete = (id) => {
-    deleteTransaction(id);
+    setConfirmDeleteId(id);
   };
 
-  const deleteTransaction = async (id) => {
+  const confirmDelete = async () => {
+    if (!confirmDeleteId) return;
     try {
-      await api.deleteTransaction(id);
-      toast({ title: "Deleted", description: "Transaction removed" });
-      
-      // Refresh data
+      await api.deleteTransaction(confirmDeleteId);
+      toast({
+        title: "Deleted",
+        description: "Transaction removed",
+        duration: 4000
+      });
       fetchTransactions();
       fetchSummary();
     } catch (error) {
       console.error('Failed to delete transaction:', error);
       toast({ title: "Error", description: error.message || "Failed to delete transaction", variant: "destructive" });
+    } finally {
+      setConfirmDeleteId(null);
     }
   };
+
+  // Undo logic removed
+
+  // deleteTransaction is now handled by confirmDelete
 
   const handleEdit = (transaction) => {
     setFormData({
@@ -330,36 +433,62 @@ export default function Transactions() {
     setShowAddDialog(false);
   };
 
-  const handleScanFileUpload = (e) => {
+  const handleScanFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (file) {
       setScanning(true);
-      setTimeout(() => {
-        setScannedData({
-          description: "Scanned Receipt",
-          amount: "750",
-          date: new Date().toISOString().split('T')[0],
-          category: "food",
+      try {
+        const result = await api.scanReceipt(file);
+        console.log(">>> OCR Transactions: Backend response:", result);
+        
+        // New flow: transaction created directly by backend with source='ocr'
+        if (result?.transaction) {
+          console.log(">>> OCR Transactions: Transaction created with source:", result.transaction.source);
+          
+          // Store transaction ID so we can delete if user rescans
+          setScannedTransactionId(result.transaction.id);
+          
+          setScannedData({
+            description: result.transaction.description || "Scanned Receipt",
+            amount: result.transaction.amount.toString(),
+            date: result.transaction.txn_date,
+            category: result.transaction.category || "shopping",
+          });
+          toast({ 
+            title: "Receipt Scanned", 
+            description: "Data extracted successfully. Review and confirm below." 
+          });
+        } else {
+          throw new Error("Invalid response: missing transaction data");
+        }
+      } catch (error) {
+        console.error("OCR Error:", error);
+        toast({ 
+          title: "Scan Failed", 
+          description: error.message || "Could not process receipt. Please try another image.",
+          variant: "destructive"
         });
+        setScannedData(null);
+      } finally {
         setScanning(false);
-      }, 2000);
+      }
     }
   };
 
   const handleScanSave = () => {
     if (scannedData) {
-      setFormData({
-        amount: scannedData.amount,
-        type: "expense",
-        category: scannedData.category,
-        date: scannedData.date,
-        description: scannedData.description,
-        paymentMode: "",
-      });
+      // OCR transaction is already created in backend with source='ocr'
+      // Clear the transaction ID so it won't be deleted on dialog close
+      setScannedTransactionId(null);
+      // Just close the dialog and refresh
       setShowScanDialog(false);
       setScannedData(null);
-      setShowAddDialog(true);
-      toast({ title: "Receipt Scanned", description: "Review and complete the form" });
+      toast({ 
+        title: "Receipt Saved", 
+        description: "Transaction created from OCR scan" 
+      });
+      // Trigger refresh of transactions list
+      fetchTransactions();
     }
   };
 
@@ -387,19 +516,41 @@ export default function Transactions() {
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold">Expenses</h1>
+          <div className="flex items-center gap-3 mb-2">
+            <h1 className="text-3xl font-bold">Expenses</h1>
+            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 dark:bg-primary/20 dark:border-primary/30">Step 3: Log Expenses</Badge>
+          </div>
           <p className="text-muted-foreground mt-1">Track and manage your daily spending</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-            <SelectTrigger className="w-40">
+          <Select value={String(selectedMonth)} onValueChange={(val) => setSelectedMonth(parseInt(val))}>
+            <SelectTrigger className="w-36">
               <Calendar className="w-4 h-4 mr-2" />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="2025-12">Dec 2025</SelectItem>
-              <SelectItem value="2026-01">Jan 2026</SelectItem>
-              <SelectItem value="2026-02">Feb 2026</SelectItem>
+              <SelectItem value="1">January</SelectItem>
+              <SelectItem value="2">February</SelectItem>
+              <SelectItem value="3">March</SelectItem>
+              <SelectItem value="4">April</SelectItem>
+              <SelectItem value="5">May</SelectItem>
+              <SelectItem value="6">June</SelectItem>
+              <SelectItem value="7">July</SelectItem>
+              <SelectItem value="8">August</SelectItem>
+              <SelectItem value="9">September</SelectItem>
+              <SelectItem value="10">October</SelectItem>
+              <SelectItem value="11">November</SelectItem>
+              <SelectItem value="12">December</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={String(selectedYear)} onValueChange={(val) => setSelectedYear(parseInt(val))}>
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={String(now.getFullYear())}>{now.getFullYear()}</SelectItem>
+              <SelectItem value={String(now.getFullYear() - 1)}>{now.getFullYear() - 1}</SelectItem>
+              <SelectItem value={String(now.getFullYear() - 2)}>{now.getFullYear() - 2}</SelectItem>
             </SelectContent>
           </Select>
           <Button variant="hero" onClick={() => setShowAddDialog(true)}>
@@ -410,27 +561,59 @@ export default function Transactions() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {/* Total Expenses */}
         <Card variant="elevated">
           <CardContent className="p-6">
-            <p className="text-sm text-muted-foreground">Total Expenses (This Month)</p>
-            <p className="text-2xl font-bold text-red-600 mt-2">₹{totalExpenses.toLocaleString()}</p>
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground font-medium">Total Expenses</p>
+              <div className="space-y-2">
+                <p className="text-2xl font-bold text-red-600">₹{totalExpenses.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">This month • Live from transactions</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
+        {/* Net Flow */}
         <Card variant="elevated">
           <CardContent className="p-6">
-            <p className="text-sm text-muted-foreground">Budget Left</p>
-            <p className={`text-2xl font-bold mt-2 ${budgetLeft >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-              ₹{budgetLeft.toLocaleString()}
-            </p>
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground font-medium">Net Flow</p>
+              <div className="space-y-2">
+                <p className={`text-2xl font-bold ${netFlow >= 0 ? "text-emerald-600" : "text-red-600"}`}>₹{Math.abs(netFlow).toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground">Income - Expenses (balance for month)</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
+        {/* Top Spending Category */}
         <Card variant="elevated">
           <CardContent className="p-6">
-            <p className="text-sm text-muted-foreground">Overspent Categories</p>
-            <p className="text-2xl font-bold text-orange-600 mt-2">{overspentCategories}</p>
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground font-medium">Top Category</p>
+              <div className="flex items-center gap-3 mt-2">
+                <span className="text-2xl">{topCategory.icon}</span>
+                <div>
+                  <p className="font-semibold">{topCategory.name}</p>
+                  <p className="text-xs text-red-600">₹{topCategory.amount.toLocaleString()} ({topCategory.percentage}% of total)</p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Categories Over Budget */}
+        <Card variant="elevated" className="border-amber-200 bg-amber-50/40">
+          <CardContent className="p-6">
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground font-medium">Over Budget Alert</p>
+              <div className="space-y-2">
+                <p className="text-2xl font-bold text-amber-600">{overBudget.count} {overBudget.count === 1 ? "Category" : "Categories"}</p>
+                <p className="text-xs text-amber-700">{overBudget.categories || "All on track"}</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -442,7 +625,7 @@ export default function Transactions() {
             <Filter className="w-5 h-5" />
             <h3 className="font-semibold">Filters</h3>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label>Search by note</Label>
               <Input
@@ -499,15 +682,6 @@ export default function Transactions() {
                 </SelectContent>
               </Select>
             </div>
-
-            <div className="space-y-2">
-              <Label>Date Range</Label>
-              <Input
-                type="date"
-                value={dateRange.start}
-                onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-              />
-            </div>
           </div>
         </CardContent>
       </Card>
@@ -543,7 +717,20 @@ export default function Transactions() {
                         <span className="text-xl">{getCategoryIcon(transaction.category)}</span>
                         <p className="text-xs text-muted-foreground mt-1">{getCategoryLabel(transaction.category)}</p>
                       </td>
-                      <td className="py-3 px-4 text-sm font-medium">{transaction.description}</td>
+                      <td className="py-3 px-4 text-sm font-medium">
+                        <div className="flex items-center gap-2">
+                          {transaction.description}
+                          {transaction.source === 'ocr' ? (
+                            <Badge variant="secondary" className="text-[10px] px-2 py-0.5 bg-primary/10 text-primary border border-primary/20 dark:bg-primary/20 dark:border-primary/30">
+                              📷 OCR
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] px-2 py-0.5 text-muted-foreground">
+                              ✏️ Manual
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
                       <td className="py-3 px-4 text-sm">{formatDate(transaction.date)}</td>
                       <td className="py-3 px-4">
                         <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted">
@@ -558,7 +745,7 @@ export default function Transactions() {
                           variant="ghost"
                           size="sm"
                           onClick={() => handleEdit(transaction)}
-                          className="hover:bg-blue-100 hover:text-blue-600"
+                          className="hover:bg-secondary hover:text-primary"
                         >
                           <Edit2 className="w-4 h-4" />
                         </Button>
@@ -570,6 +757,19 @@ export default function Transactions() {
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
+                            {/* Confirm Delete Dialog */}
+                            <Dialog open={!!confirmDeleteId} onOpenChange={open => { if (!open) setConfirmDeleteId(null); }}>
+                              <DialogContent>
+                                <DialogHeader>
+                                  <DialogTitle>Delete Transaction?</DialogTitle>
+                                </DialogHeader>
+                                <p>Are you sure you want to delete this transaction? This action cannot be undone.</p>
+                                <div className="flex justify-end gap-2 mt-4">
+                                  <Button variant="outline" onClick={() => setConfirmDeleteId(null)}>Cancel</Button>
+                                  <Button variant="destructive" onClick={confirmDelete}>Delete</Button>
+                                </div>
+                              </DialogContent>
+                            </Dialog>
                       </td>
                     </tr>
                   ))}
@@ -698,7 +898,27 @@ export default function Transactions() {
       </Dialog>
 
       {/* Scan Receipt Dialog */}
-      <Dialog open={showScanDialog} onOpenChange={setShowScanDialog}>
+      <Dialog open={showScanDialog} onOpenChange={async (open) => {
+        // If dialog is closing and there's a scanned transaction that wasn't saved, delete it
+        if (!open && scannedTransactionId && scannedData) {
+          try {
+            await api.deleteTransaction(scannedTransactionId);
+            console.log(">>> OCR: Deleted unsaved scan transaction:", scannedTransactionId);
+            toast({ 
+              title: "Scan Cancelled", 
+              description: "Receipt scan was discarded" 
+            });
+          } catch (error) {
+            console.error(">>> OCR: Error deleting unsaved scan:", error);
+          }
+          setScannedTransactionId(null);
+        }
+        setShowScanDialog(open);
+        if (!open) {
+          setScannedData(null);
+          setScannedTransactionId(null);
+        }
+      }}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>Scan Receipt (OCR)</DialogTitle>
@@ -716,13 +936,10 @@ export default function Transactions() {
               <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
                 <FileText className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
                 <p className="text-muted-foreground mb-4">Upload a receipt image or PDF</p>
-                <div className="flex gap-2 justify-center flex-wrap">
+                <div className="flex gap-2 justify-center">
                   <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
                     <Upload className="w-4 h-4 mr-2" />
                     Upload File
-                  </Button>
-                  <Button variant="hero" onClick={() => fileInputRef.current?.click()}>
-                    📷 Take Photo
                   </Button>
                 </div>
               </div>
@@ -784,7 +1001,20 @@ export default function Transactions() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => setScannedData(null)}
+                    onClick={async () => {
+                      // Delete the previous OCR transaction if user rescans
+                      if (scannedTransactionId) {
+                        try {
+                          await api.deleteTransaction(scannedTransactionId);
+                          console.log(">>> OCR: Deleted previous scan transaction:", scannedTransactionId);
+                        } catch (error) {
+                          console.error(">>> OCR: Error deleting previous scan:", error);
+                        }
+                      }
+                      setScannedData(null);
+                      setScannedTransactionId(null);
+                      fileInputRef.current.value = "";
+                    }}
                     className="flex-1"
                   >
                     Rescan
